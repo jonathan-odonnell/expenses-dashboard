@@ -24,7 +24,7 @@ db.init_app(app)
 
 
 class Expense (db.Model):
-    id = db.Column(db.Integer, primark_key=True)
+    id = db.Column(db.Integer, primary_key=True)
     description = db.Column(db.String(120), nullable=False)
     amount = db.Column(db.Float, nullable=False)
     category = db.Column(db.String(50), nullable=False)
@@ -35,7 +35,7 @@ with app.app_context():
     db.create_all()
 
 
-CATEGORIES = ['Food', 'Transport', 'Rent']
+CATEGORIES = ['Food', 'Transport', 'Rent', 'Utilities', 'Health']
 
 
 def parse_date_or_none(s: str):
@@ -49,39 +49,54 @@ def parse_date_or_none(s: str):
 
 @app.route("/")
 def index():
-    start_date = request.args['start'].strip()
-    end_date = request.args['end'].strip()
-    start_date = parse_date_or_none(start_date)
-    end_date = parse_date_or_none(end_date)
-    category = request.args['category'].strip()
+    start_str = request.args.get('start', '').strip()
+    end_str = request.args.get('end', '').strip()
+    start = parse_date_or_none(start_str)
+    end = parse_date_or_none(end_str)
+    current_category = request.args.get('category', '').strip()
 
-    if start_date and end_date and end_date < start_date:
+    if start and end and end < start:
         flash("End date can't be before start date", "error")
         start_date, end_date = None
 
     q = Expense.query
 
-    if start_date:
-        q.filter(Expense.date >= start_date)
-    if end_date:
-        q.filter(Expense.date <= end_date)
-    if category:
-        q.filter(Expense.category == category)
+    if start:
+        q.filter(Expense.date >= start)
+    if end:
+        q.filter(Expense.date <= end)
+    if current_category:
+        q.filter(Expense.category == current_category)
 
     expenses = q.order_by(
         Expense.date.desc(), Expense.id.desc()).all()
     total = round(sum(e.amount for e in expenses))
 
-    category_q = Expense.query(Expense.category, func.sum(Expense.amount))
+    category_q = db.session.query(Expense.category, func.sum(Expense.amount))
+
+    if start:
+        category_q.filter(Expense.date >= start)
+    if end:
+        category_q.filter(Expense.date <= end)
+    if current_category:
+        category_q.filter(Expense.category == current_category)
+
     category_rows = category_q.group_by(Expense.category).all()
     category_labels = [
         category for category, amount in category_rows]
     category_amounts = [
         round(float(amount or 0), 2) for category, amount in category_rows]
 
-    daily_q = Expense.query(Expense.date, func.sum(Expense.amount))
-    daily_rows = daily_q.group_by(
-        Expense.category).order_by(Expense.date).all()
+    daily_q = db.session.query(Expense.date, func.sum(Expense.amount))
+
+    if start:
+        daily_q.filter(Expense.date >= start)
+    if end:
+        daily_q.filter(Expense.date <= end)
+    if current_category:
+        daily_q.filter(Expense.category == current_category)
+
+    daily_rows = daily_q.group_by(Expense.date).all()
     daily_labels = [
         day.isoformat() for day, amount in daily_rows]
     daily_amounts = [
@@ -91,14 +106,14 @@ def index():
         "index.html",
         expenses=expenses,
         categories=CATEGORIES,
-        category=category,
+        current_category=current_category,
         category_labels=category_labels,
         category_amounts=category_amounts,
         daily_labels=daily_labels,
         daily_amounts=daily_amounts,
         total=total,
-        start_date=datetime.strftime(start_date, "%Y-%m-%d").date(),
-        end_date=datetime.strftime(end_date, "%Y-%m-%d").date(),
+        start=start_str,
+        end=end_str,
         today=date.today().isoformat()
     )
 
@@ -198,11 +213,11 @@ def delete(expense_id):
 
 @app.get("/export.csv")
 def export_csv():
-    start_date = request.args['start'].strip()
-    end_date = request.args['end'].strip()
+    start_date = request.args.get('start', '').strip()
+    end_date = request.args.get('end').strip()
     start_date = parse_date_or_none(start_date)
     end_date = parse_date_or_none(end_date)
-    category = request.args['category'].strip()
+    category = request.args.get('category').strip()
 
     q = Expense.query
 
